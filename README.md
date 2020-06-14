@@ -198,7 +198,31 @@ double barriers 使 client 能够同步计算的开始和结束。当有 barrier
 
 ## 3 ZooKeeper Applications
 
+现在，我们描述一些使用 ZooKeeper 的应用程序，并简要说明它们如何使用它。 我们以**粗体**显示每个示例的原语。
 
+### The Fetching Service
+
+爬虫时搜索引擎很重要的一本文，雅虎爬取数亿个网络文档。*Fetching Service*\(FS\)是目前雅虎爬虫的一部分，并被应用在生产环境中。它有 master 进程，来控制页面爬取进程。master 服务器为提取程序提供配置，并且爬取程序回写其状态和运行状况。  FS 使用 ZooKeeper 的主要优点是可以从主服务器故障中恢复过来，即使出现故障也可以保证可用性，并且可以将客户端与服务器分离，从而允许它们仅通过从ZooKeeper读取状态即可将请求定向到运行正常的服务器。因此 FS 主要使用 ZooKeeper 做**元数据配置**，同时它也使用 ZooKeeper 来选出领导者（**领导选举**）。
+
+![fig02_workload_for_zk](images/fig02_workload_for_zk.png)
+
+> Figure 2: Workload for one ZK server with the Fetching Service. Each point represents a one-second sample.
+
+Figure 2 显示了三天中 FS 使用的ZooKeeper服务器的读写流量。 为了生成该图，我们计算该时间段内每秒的操作数，每个点对应于该秒内的操作数。 我们观察到，与写入流量相比，读取流量要高得多。 在速率高于 1,000 每秒的操作期间，读/写比率在10:1和100:1之间变化。 此工作负载中的读取操作为`getData()`，`getChildren()`和`exist()`（按调用频率程度递增的顺序）。
+
+### Katta
+
+Katta 是使用 ZooKeeper 进行协调的分布式索引器，它是非 Yahoo 应用程序的示例。 Katta使用分片划分索引工作。 master 服务器将分片分配给 slave 服务器并跟踪进度。slave 服务器可能会发生故障，因此 master 必须根据 slave 的情况分配负载。 master 服务器也可能发生故障，因此在发生故障时，其他服务器必须准备好接管集群，成为 master。 Katta使用ZooKeeper跟踪从属服务器和主服务器的状态（**group membership**），并处理主服务器故障转移（**领导选举**）。 Katta 还使用 ZooKeeper 来跟踪分片的分配并将其传播给 slave（**configuration management**）。
+
+### Yahoo! Message Broker
+
+Yahoo! Message Broker (YMB) 是一个分布式的 publish-subscribe 系统。 该系统管理着数千个 topics，client 可以向其发布消息或从中接收消息。 topics 分布在一组服务器之间，以提供可扩展性。 每个主题都使用主从备份方案进行复制，该方案可确保将消息复制到两台计算机上，以确保可靠的消息传递。 组成YMB的服务器使用 shared-nothing 分布式架构，这使得协调对于正确操作至关重要。  YMB使用ZooKeeper来管理 topics 的分布（**元数据配置**），处理系统中机器的故障（**故障检测**和**group membership**）以及控制系统操作。
+
+![fig03_layout_of_yahoo_broker](images/fig03_layout_of_yahoo_broker.png)
+
+Figure 3显示了 YMB 的`znode`数据分布的一部分。 每个 broker 域都有一个称为节点的znode，该节点对组成YMB服务的每个活跃的服务器都有一个 `EPHERMERAL znode`。Each YMB server creates an ephemeral znode under nodes with load and status information providing both group membership and status information through ZooKeeper. Nodes such as shutdown and migration prohibited are monitored by all of the servers that make up the service and allow centralized control of YMB. The topics directory has a child znode for each topic managed by YMB. These topic znodes have child znodes that indicate the primary and backup server for each topic along with the subscribers of that topic. The primary and backup server znodes not only allow servers to discover the servers in charge of a topic, but they also manage leader election and server crashes.
+
+![fig04_zk_components](images/fig04_zk_components.png)
 
 ## 4 ZooKeeper Implementation
 
