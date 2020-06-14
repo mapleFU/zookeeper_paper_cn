@@ -109,35 +109,92 @@ ZooKeeper 也有下述两个 liveness 和持久性保证：如果大部分 ZooKe
 
 ### 2.4 Examples of primitives
 
-在本节中，我们将展示如何使用 ZooKeeper API来实现更强大的原语。 ZooKeeper 服务对这些更强大的原语一无所知，因为它们是完全使用 ZooKeeper client API在客户端上实现的。 一些常见的原语（例如group membership 和配置管理）也是 wait-free 的。 对于其他地方，例如 rendezvous，client 需要等待事件。 即使ZooKeeper 无需等待，我们也可以使用 ZooKeeper 实现高效的阻塞原语。*ZooKeeper的顺序保证允许对系统状态进行有效的推理，而 watch 则可以进行有效的等待。*
+在本节中，我们将展示如何使用 ZooKeeper API来实现更强大的原语。 ZooKeeper 服务对这些更强大的原语一无所知，因为它们是完全使用 ZooKeeper client API在客户端上实现的。 一些常见的原语（例如group membership 和配置管理）也是 wait-free 的。 对于其他地方，例如 rendezvous，client 需要等待事件。 即使ZooKeeper 无需等待，我们也可以使用 ZooKeeper 实现高效的阻塞原语。ZooKeeper的顺序保证允许对系统状态进行有效的推理，而 watch 则可以进行有效的等待。
 
 #### 配置管理
 
+ZooKeeper 可以被用来实现分布式应用中的动态配置。在它最简单的形式中，配置被存储在 `znode` `Zc` 中， 进程以 `Zc` 的完整路径名启动。 启动进程通过将 watch 标志设置为 true 来读取 `Zc` 来获取其配置。 如果`Zc`中的配置出现任何更新，则会通知进程并读取新配置，进程再次将watch标志设置为true。
 
+注意在这个模式中，如同大部分其它使用 watch 的模式，watch 被用来保证进程有最近的信息。例如，如果一个 watch `Zc` 的进程，在读取之前发出了3个对 `Zc` 的更改，那么这个进程不会收到三个通知。这不会影响进程的行为，因为这三个事件只会通知进程它已经知道的内容：它对`Zc` 拥有的信息是陈旧的。
+
+\(这里我有点不明白，是指更新的时候会完成一次 sync 么)
 
 #### Rendezvous
 
-
+有时在分布式系统中，我们不会预先知道最终的系统配置会是什么样子的。例如，一个客户端可能需要启动一个 master 进程和不少 worker 进程，但是启动进程是由调度器完成的，所以客户端不能提前知道知道需要连接的 Address 和 Port 等连接 master 需要的相关的信息。我们通过 client 创建 `rendezvous znode` （即 `Zr`）来解决这个问题。客户端把 `Zr` 的整个路径作为启动参数传给 master 和 worker 进程。当 master 启动时，它会把自己的地址和端口信息填充进 `Zr`.当 workers 启动的时候，它们会以 watch flag 读取 `Zr`。如果 `Zr` 还没有被填充， worker 就会等待 `Zr` 被更新。如果 `Zr` 是一个 `ephemeral` 节点，master 和 worker 进程可以通过 watch `Zr` 等待是否被删除，决定在 client 终止后对自己进行清理。
 
 #### Group Membership
 
+我们利用 `ephemral` 节点来实现 group membership. 特别的，我们利用 `ephemeral` 节点允许我们看到创建 `znode` 的 `session` 状态的特性。我们从指定一个 `znode` `Zg`，来代表这个 group 开始。当一个group的成员启动后，它在 `Zg` 下创建一个临时节点。如果每个进程都有一个唯一的名称或者标识符，那么这个名称就会被用作创建的子 `znode` 的名称; 否则，他会用 `SEQUENTIAL` flag 来创建一个有独立名称的 `znode`。进程可以将进程信息，入该进程使用的地址和端口，放入子`znode`的数据中。
 
+在`Zg`下创建子`znode`后，该过程将正常启动。 它不需要做任何其他事情。 如果该过程失败或结束，则代表`Zg`的`znode` 会自动删除。进程可以通过简单列出`Zg`的子代来获取组信息。 如果某个进程希望监视组成员身份的更改，则该进程可以将监视标志设置为 true，并在收到更改通知时刷新组信息（始终将监视标志设置为true）。
 
 #### Simple Locks
 
+尽管ZooKeeper不是锁服务，但可以用来实现锁。使用 ZooKeeper 的应用程序通常使用根据其需求量身定制的同步原语，例如上面所示的那些。在这里，我们展示了如何使用 ZooKeeper 实现锁，以表明它可以实现各种各样的常规同步原语。
 
+最简单的锁实现使用“lock files”。该锁由 `znode` 表示。为了获取锁，客户端尝试使用`EPHEMERAL`标志创建指定的`znode`。如果创建成功，则客户端将持有该锁。否则，客户端可以设置 watch 标志读取`znode`，以便在当前领导者去世时得到通知。客户端宕机或显式删除`znode`时会释放该锁。其他等待锁定的客户端一旦观察到`znode`被删除，就会再次尝试获取锁定\(即创建 `znode` )。
+
+尽管此简单的锁定协议有效，但确实存在一些问题。首先，它具有惊群效应。如果有许多等待获取锁的客户端，则即使只有一个客户端可以获取锁，他们也会争夺该锁。其次，它仅实现互斥锁。以下两个原语显示了如何同时解决这两个问题。
 
 #### Simple Locks without Herd Effect
 
+我们定义一个锁`znode` *l* 来实现这种锁。 直观地说，我们排队所有请求锁定的客户端，每个客户端都按照请求到达的顺序获得锁定。 因此，希望获得该锁的客户端执行以下操作：
 
+```
+Lock
+1: n - create(1 + "/lock-", EPHEMERAL | SEQUENTIAL)
+2: C = getChildren(1, false)
+3: if n is lowest znode in C, exit
+4: p = znode in C ordered just before n
+5: if exists(p, true) wait for watch event
+6: goto 2
+
+Unlock
+1: delete(n)
+```
+
+在Lock的第1行中使用`SEQUENTIAL`标志，命令 client 尝试获取锁，并相对其它的尝试获得一个序列号。如果客户端的`znode`在第3行的序列号最小，则客户端将持有该锁。否则，客户端将等待删除 持有 Lock 或将在此客户端的`znode` 之前收到锁定的有更小序列号的 `znode` 。通过仅查看客户端`znode`之前的`znode`，我们仅在释放锁或放弃锁请求时才唤醒一个进程，从而避免了惊群效应。客户端监视的znode消失后，客户端必须检查它现在是否持有该锁。（先前的 Lock 请求可能已被放弃，并且具有较低序号的`znode` 仍在等待或保持锁定。）
+
+释放锁定就简单地直接删除代表 Lock 请求的`znode`  *n*。通过在创建 `znode` 时使用`EPHEMERAL`标志，崩溃的进程将自动清除所有锁定请求或释放它们可能拥有的任何锁定。
+
+总之，此锁定方案具有以下优点：
+
+1. 删除一个`znode`只会导致一个客户端唤醒，因为每个`znode`都被另一个客户端 watch，因此我们没有惊群效应；
+2. 没有轮询或超时；
+3. 由于我们实现了锁定的方式，因此通过浏览ZooKeeper数据可以看到 Lock 争用，中断锁定和调试锁定问题的进程的数量。
 
 #### Read/Write Locks
 
+为了实现读/写锁，我们略微更改了锁过程，并分别设置了读锁和写锁。 解锁过程与全局锁定情况相同。
 
+```
+Write Lock:
+1: n = create(1 + "write-", EPHEMERAL|SEQUENTIAL)
+2: c = getChildren(1, false)
+3: if n is lowest znode in C exit
+4: p = znode in C ordered just before n
+5: if exists(p, true) wait for event
+6: goto 2
+```
+
+
+
+```
+Read Lock
+1: n = create(1 + "read-", EPHEMERAL|SEQUENTIAL)
+2: c = getChildren(1, false)
+3: if no write znodes lower than n in C, exit
+4: p = write znode in C ordered just before n
+5: if exists(p, true) wait for event
+6: goto 3
+```
+
+该锁定过程与之前的锁定略有不同。 写锁仅在命名上有所不同。 由于读锁可能是 shared 的，因此第3行和第4行略有不同，因为只有较早的写锁`znode`会阻止客户端获得读锁。 当有多个客户端等待读锁时，当删除具有较低序号的`write-` znode时，我们可能会收到“惊群效应”。 实际上，这是一种期望的行为，所有那些需要读的客户端都应被通知，因为它们现在可能已具有锁定。
 
 #### Double Barrier
 
-
+double barriers 使 client 能够同步计算的开始和结束。当有 barrier 限制定义的足够多的进程加入 barrier 时，进程将会开始它们的计算，并在计算结束后离开 barrier。我们在 ZooKeeper 中用`znode` 表示一个 barrier，称为*b*。 每个进程p都会在进入时通过将`znode`创建为 *b* 的子节点来向 *b* 注册，并在准备离开时取消注册，即删除该子节点。 当b的子`znode`数量超过障碍阈值时，进程可以进入 barrier。 当所有进程都删除了其子进程时，进程可以离开 barrier。 我们使用 watch 来有效地等待进入和退出 barrier 条件得到满足。 要进入 barrier，流程会监视是否存在 *b* 的 ready 子 `znode` ，该子 `znode` 将由导致子节点数超过障碍阈值的进程创建。 要离开 barrier，进程会 watch 特定的子节点的消失，并且仅在这个`znode`被删除之后检查退出条件。
 
 ## 3 ZooKeeper Applications
 
