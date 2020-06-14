@@ -44,8 +44,6 @@ ZooKeeper 服务用使用了复制来保证高可用和性能的服务器组成�
 
 ZooKeeper 给它的客户端提供了“data nodes\(`znodes`\)的集合”的抽象，用层次的名称空间组织他们。client 通过 API 操纵在这个层次中的数据对象。层次的名称空间在文件系统里被广泛使用。这是一种组织层次空间的可靠方法，因为用户习惯这种抽象，同时它使更好的应用元数据组织成为可能。为了引用一个给定的 `znode` ，我们使用标准的 UNIX 文件系统路径。例如，我们使用 `/A/B/C` 来表示到 `znode` C 的路径，B 是 C 的父节点，同时 A 是 B 的父节点。所有的 `znode` 都存储数据，同时，除了 `ephemeral znodes` 外的所有的 `znode` ，都能拥有子节点。
 
-// TODO: 插入 Figure1
-
 client 可以创建两种 `znode`:
 
 * `Regular`: client 显式操纵和删除 `regular znodes`
@@ -53,11 +51,13 @@ client 可以创建两种 `znode`:
 
 此外，当我们创建一个新的 `znode` 的时候，一个 client 可以设置 `sequential` flag. 通过 `sequential` flag 创建的节点会有在名称添加一个单调递增的计数器。如果 `n` 是新的 `znode`, `p` 是他的父节点，那么 `n` 的名称中添加的值不会小与 `p` 的子节点中创建过的任何一个添加的值。
 
-ZooKeeper 通过现实 watch 来允许 client 不需要轮询的定时接收到值的变化的通知。当一个客户端带有 `watch` flag 并发起读请求的时候，该操作将正常完成，除了服务器承诺在返回的信息已更改时会通知客户端。 监视是与会话相关的一次性触发器； 一旦触发或会话关闭，它们将不被注册。 监视表明发生了更改，但未提供更改。 例如，如果客户端在两次更改`/foo`之前发出了请求 `getData('/ foo'，true)`，则客户端将只获得一个 watch事件，告知客户端`/foo`的数据已更改。 `session` 事件（例如连接丢失事件）也将发送到 watch 回调，以便客户端知道 watch 事件可能会延迟.
+ZooKeeper 通过现实 watch 来允许 client 不需要轮询的定时接收到值的变化的通知。当一个客户端带有 `watch` flag 并发起读请求的时候，该操作将正常完成，除了服务器承诺在返回的信息已更改时会通知客户端。 监视是与会话相关的一次性触发器； 一旦触发或会话关闭，它们将不被注册。 监视表明发生了更改，但未提供更改。 例如，如果客户端在两次更改`/foo`之前发出了请求 `getData('/foo'，true)`，则客户端将只获得一个 watch事件，告知客户端`/foo`的数据已更改。 `session` 事件（例如连接丢失事件）也将发送到 watch 回调，以便客户端知道 watch 事件可能会延迟.
 
 #### 数据模型
 
 ZooKeeper 的数据模型是一个只有把全部数据整个读/写的文件系统的简化 api, 或者有 key 层次的 key/value 表。层次名称空间对于为不同应用程序的名称空间分配子树以及设置对这些子树的访问权限很有用。 我们还将在客户端利用目录的概念来构建更高级别的原语，如我们在2.4节中将看到的。
+
+![fig01_hierarchical_name_space](images/fig01_hierarchical_name_space.png)
 
 与文件系统中的文件不同，znode不适用于常规数据存储。 相反，`znodes` 存储 client 引用的数据，通常是用于协调的元数据。为了图解，在 Figure 1 中我们有两个子树，一个用于应用程序1（`/app1`），另一个用于应用程序2（`/app2`）。应用程序1的子树实现了一个简单的组成员身份协议：每个客户端进程`pi`在`/app1`下创建一个`znode`  `pi`，只要该进程正在运行，该节点便会持续存在。
 
@@ -69,7 +69,21 @@ client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 ti
 
 ### 2.2 Client API
 
+我们在下方展示了一个 ZooKeeper API 的子集，并讨论了每个请求的语义：
 
+* `create(path, data, flags)`: 根据路径名称 `path`，它存储的`data[]`，创建一个 `znode`, 并返回这个新的 `znode` 的名称。`flags` 允许客户端选择选定的 `znode` 类型：`regular`, `ephemeral` 及设置 `sequential`  flag。
+* `delete(path, version)`: 如果 `znode` 符合给定的 `version` 版本，则删除`path` 下的 `znode`。
+* `exists(path, watch)`: 如果 `path` 下的 `znode` 存在，返回 true, 否则返回 false.`watch` 标志可以使 client 在 `znode` 上设置 watch。
+* `getData(path, watch)`: 返回 `znode` 的数据和元数据（元数据例如版本信息）。`watch` 和 `exists()` 里面的作用一样，不同之处在于，如果`znode`不存在，则 ZooKeeper 不会设置手表。
+* `setData(path, data, version)`: 如果 `version` 是 `znode` 现有的版本，把 `data[]` 写进 `znode`.
+* `getChildren(path, watch)`: 返回`path` 对应的 `znode` 的子节点集合。
+* `sync(path)`: 等待操作开始时所有没有同步的更新传播到 client 连接到的服务器。 该`path` 当前被忽略。
+
+所有的的方法在 API 中都有一个同步版本和一个异步版本。 当应用程序需要执行单个 ZooKeeper 操作且没有要并发执行的任务时，它会使用同步API，因此它会进行必要的 ZooKeeper 调用并进行阻塞。但是，异步API使应用程序可以并行执行多个 ZooKeeper 操作和其他任务。 ZooKeeper client 保证按顺序调用每个操作的相应回调。
+
+需要注意的是，ZooKeeper 不使用句柄来操纵 `znode`. 作为替代，每个请求都带有需要操作的 `znode` 的完整路径。这样不知简化了 API \(没有 `open()` 和 `close()` 方法\), 也消除了服务器需要维护的额外状态。
+
+每种更新方法均需要一个预期的 version，从而可以实施条件更新。 如果 `znode` 的实际版本号与预期版本号不匹配，则更新将失败，并出现 ` unexpected version error`。 如果给定的预期版本号为 `-1`，则不执行版本检查。
 
 ### 2.3 ZooKeeper guarantees
 
