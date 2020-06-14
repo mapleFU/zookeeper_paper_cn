@@ -87,9 +87,55 @@ client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 ti
 
 ### 2.3 ZooKeeper guarantees
 
+ZooKeeper 有两个基本的顺序保证：
 
+* **Linearizable Writes**: 所有的更新 ZooKeeper 状态的请求都是 serializable 的，并且遵循优先级。
+* **FIFO client order**: 一个给定客户端发送的所有的请求都是按照客户端发送的顺序有序执行的。
+
+注意我们对 `linearizability` 的定义和 Herihy 的原始提议不同，我们叫它 *A-linearizability* \(asynchronize linearizability\). 在 Herilihy 的原始的 linearizable 顶柜中，一个客户端只能在同一时间内有一个未完成的请求（一个客户端是一个线程）。在我们的系统中，我们允许一个客户端有复数个未完成的操作，并且我们可以选择不保证未完成操作的执行顺序，或者使用保证 FIFO 顺序。我们选择后者作为我们的属性，可以观察到，对于保持 linearizable 对象也会保持 A-linearizable ，因为满足 A-linearizable 的系统也会满足 linearizable。因为只有更新请求是 A-linearizable 的，所以 ZooKeeper 可以在每个副本本地处理读请求。这样，当服务器添加到系统时，服务可以线型扩展。
+
+为了了解两个保证是怎么讲i傲虎的，考虑下列的场景。一个系统由一组进程组成，它选择出一个 leader，并由 leader 操作工作进程。但一个新的 Leader 接管整个系统时，它必须更新大量的配置参数，并在更新结束的时候通知其它进程。这样我们有两个重要的需求：
+
+1. 当新的 Leader 开始更改系统时，我们不希望其它进程开始使用被更改的配置。
+2. 当新的 Leader 在配置完全更新完成之前就宕机时，我们不希望其它进程使用半更新的配置。
+
+观察到分布式锁，例如 Chubby 提供的锁，将会帮助我们完成需求1，但是对需求2并不有效。有了 ZooKeeper, 新的 Leader 可以指定一个路径，并把它当成一个 `ready znode`，其他的进程只会在这个 `znode` 存在的时候使用这套配置。新的 leader 靠 \(1\) 删除 `ready` \(2\) 更新配置的 `znode` \(3\) 重新创建 `ready` 来完成上述需求。上述的所有变更可以被流水线处理，并发起一个异步请求来快速更新配置状态。尽管更改操作的等待时间约为2毫秒，但是如果一个请求接一个发出，则必须更新5000个不同znode的新领导者将花费10秒。 通过异步发出请求，请求将花费不到一秒钟的时间。由于顺序保证，如果进程看到 ready `znode`，则它还必须看到新的 Leader 所做的所有配置更改。 如果新的 Leader 在创建 ready `znode` 之前宕机，则其他进程知道该配置尚未完成，因此不使用它。
+
+上述的模式仍然有一个问题：如果一个进程在新的 Leader 开始变更并读到配置看到 ready 存在会发生什么？这个问题通过 notification 的顺序保证解决：如果一个客户端正在 watch 一个变更，这个客户端会在它看到配置变更之前收到一个通知。因此，如果读取 ready `znode` 的进程请求要在 `znode` 变更的时候被通知，它的 client 会在收到配置变化之前，收到  ready `znode` 变化的通知。
+
+当 client 除了 ZooKeeper之外还拥有自己的通信 channel 时，可能会出现另一个问题。 例如，考虑两个客户端 A、B在 ZooKeeper 中有共享的配置，并通过一个共享的通信 channel 通信。如果 A 更改了 ZooKeeper 中的共享配置，并通过 channel 告知 B，B 会期望在重新读取的时候看到配置的变化。 如果B的ZooKeeper副本稍微落后于A，则可能看不到新配置（因为读是在本地进行的）。使用上一段中的保证 B 可以通过在重新读取配置之前发出写入操作来确保它能看到最新信息。为了更有效地处理这种情况，ZooKeeper提供了 `sync` 请求：在进行读取后，构成了慢的读取读取。`sync`操作不需要一次写操作就可以在读之前使得服务器将所有 pending 的写请求完成。这一原语与ISIS的原语`flush`类似。
+
+ZooKeeper 也有下述两个 liveness 和持久性保证：如果大部分 ZooKeeper 服务器是活跃的并且可以通信，ZooKeeper 服务是可用的， 如果 ZooKeeper 服务成功响应更改请求，任何数量的 ZooKeeper 服务器故障中，该变更都会持续存在，只要最终大部分服务器可以恢复。
 
 ### 2.4 Examples of primitives
+
+在本节中，我们将展示如何使用 ZooKeeper API来实现更强大的原语。 ZooKeeper 服务对这些更强大的原语一无所知，因为它们是完全使用 ZooKeeper client API在客户端上实现的。 一些常见的原语（例如group membership 和配置管理）也是 wait-free 的。 对于其他地方，例如 rendezvous，client 需要等待事件。 即使ZooKeeper 无需等待，我们也可以使用 ZooKeeper 实现高效的阻塞原语。*ZooKeeper的顺序保证允许对系统状态进行有效的推理，而 watch 则可以进行有效的等待。*
+
+#### 配置管理
+
+
+
+#### Rendezvous
+
+
+
+#### Group Membership
+
+
+
+#### Simple Locks
+
+
+
+#### Simple Locks without Herd Effect
+
+
+
+#### Read/Write Locks
+
+
+
+#### Double Barrier
 
 
 
