@@ -220,7 +220,9 @@ Yahoo! Message Broker (YMB) 是一个分布式的 publish-subscribe 系统。 �
 
 ![fig03_layout_of_yahoo_broker](images/fig03_layout_of_yahoo_broker.png)
 
-Figure 3显示了 YMB 的`znode`数据分布的一部分。 每个 broker 域都有一个称为节点的znode，该节点对组成YMB服务的每个活跃的服务器都有一个 `EPHERMERAL znode`。Each YMB server creates an ephemeral znode under nodes with load and status information providing both group membership and status information through ZooKeeper. Nodes such as shutdown and migration prohibited are monitored by all of the servers that make up the service and allow centralized control of YMB. The topics directory has a child znode for each topic managed by YMB. These topic znodes have child znodes that indicate the primary and backup server for each topic along with the subscribers of that topic. The primary and backup server znodes not only allow servers to discover the servers in charge of a topic, but they also manage leader election and server crashes.
+Figure 3显示了 YMB 的`znode`数据分布的一部分。 每个 broker 域都有一个称为节点的znode，该节点对组成YMB服务的每个活跃的服务器都有一个 `EPHERMERAL znode`。每个 YMB 服务器创建一个带有负载和状态的 `EPHERMERAL znode`, 写入节点的负载和状态信息，来提供 group membership 和状态信息。表示 shutdown 和迁移的节点受 YMB 的控制。topic 目录中，每个 topic 会创建一个子 znode，这些 topic znode 对于订阅它们的 topic 和从服务器也有子 znode. 主从 znode 节点不止允许服务器寻找到负责一个 topic 的服务器，还能在主服务器宕机后进行领导选举。
+
+
 
 ![fig04_zk_components](images/fig04_zk_components.png)
 
