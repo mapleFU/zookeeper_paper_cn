@@ -315,11 +315,21 @@ ZooKeeper 可以通过把请求分发给组成服务的服务器来提高负载�
 
 ### 5.2 Latency of requests
 
+为了获得请求的延迟，我们根据 Chubby 的 benchmark 建立了一个 benchmark 模型。我们创建一个工作进程，进程简单的发送一个 `create`，等待 `create` 完成，发送一个异步的 delete，并开始下一个 `create`。我们会相应地更改工作进程的数量，并且每次运行，我们每个工作进程创建50,000个节点。 我们将完成的创建请求数除以所有工作进程完成所花费的总时间来计算吞吐量。
 
+![table02_create_requests_processed_per_sec](images/table02_create_requests_processed_per_sec.png)
+
+表2显示了我们 benchmark 测试的结果。 创建请求包含 1K 大小的数据，而不是Chubby benchmark 中的5个 bytes，以更好地与我们的预期使用方式相吻合。 即使有这些较大的请求，ZooKeeper 的吞吐量也比 Chubby 发布的吞吐量高出3倍以上。 单个ZooKeeper worker benchmark测试的吞吐量表明，三台服务器的平均请求延迟为1.2毫秒，九台服务器的平均请求延迟为1.4毫秒。
+
+![table03_barrier_experiment_with_time_in_secs](images/table03_barrier_experiment_with_time_in_secs.png)
 
 ### 5.3 Performance of barriers
 
+在本实验中，我们依次执行许多 barrier 来评估使用 ZooKeeper 实现的原语的性能。对于给定数量的 barrier *b*，每个客户首先进入 barrier *b*，然后依次离开 barrier *b*。当我们使用第2.4节中的 double barrier 时，客户端首先要等待所有其他客户端执行`enter()`过程，然后再移至下一个调用（类似于`leave()`）。
 
+我们在表3中报告了我们的实验结果。在此实验中，我们有50、100和200个客和连续的 b 的 barrier `b∈{200，400，800，1600}`。  尽管一个应用程序可以具有数千计的 ZooKeeper 客户端，但是由于每个客户端通常根据应用程序的具体情况进行分片，因此通常每个参与协调操作的子集要小得多。
+
+该实验的两个有趣观察结果是，处理所有 barrier 的时间随 barrier 数量的增加而线性增长，这表明并发访问数据树的相同部分不会产生任何其它的延迟，并且延迟与 client 数量成比例地增加。 这是 ZooKeeper服务不饱和状态下的结果。 In fact, we observe that even with clients proceeding in lock-step, the throughput of barrier operations (enter and leave) is between 1,950 and 3,100 operations per second in all cases. 在ZooKeeper，这对应于每秒 10700至17000次操作之间的吞吐量值。 在我们的实现中，读写比例为4:1（读操作的80％），与ZooKeeper可以达到的原始吞吐量（根据图5超过40,000）相比，我们的 barrier benchmark 吞吐量要低得多。 这是由于客户端需要等待其他客户端 `enter`。
 
 ## 6 Related work
 
@@ -327,7 +337,9 @@ ZooKeeper 可以通过把请求分发给组成服务的服务器来提高负载�
 
 ## 7 Conclusions
 
+通过将 wait-free 对象暴露给客户端，来解决分布式系统中进程协调的问题。我们发现ZooKeeper对于Yahoo!内部和外部的多个应用程序很有用。ZooKeeper通过使用 watch 和快速读取功能（均由本地副本提供服务）来实现以读取为主的工作负载，达到了每秒数十万次操作的吞吐量值。 尽管我们对读取和监视的一致性保证似乎很弱，但是我们已通过用例表明，即使读取没有优先级排序并且数据对象是 wait-free 的，ZooKeeper 系统使我们能够在客户端实现高效且复杂的协调协议。 事实证明，wait-free 对高性能系统来说非常重要。
 
+尽管我们仅描述了少数几个应用程序，但还有许多其他使用 ZooKeeper 的应用程序。 我们相信，ZooKeeper 成功的原因在于其简单的接口以及可以通过此接口实现的强大抽象。 此外，由于ZooKeeper的高吞吐量，应用程序不仅可以粗粒度的 Lock, 更可以广泛扩展使用它。
 
 ### Acknowledgements
 
