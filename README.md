@@ -276,3 +276,93 @@ ZooKeeper 按照 FIFO 的顺序处理客户端的请求。返回值包括对应�
 
 为了检测客户端 session 的 failure, ZooKeeper 使用了 timeout。如果在 timeout 时间内，没有其他服务器收到一个 client session 对应的消息，即判定为 failure。如果客户端足够频繁地发送请求，则无需发送任何其他消息。 否则，客户端会在活动不足时发送心跳消息。 如果客户端无法与服务器通信以发送请求或心跳，则它将连接到其他ZooKeeper服务器以重新建立其会话。 为了防止会话超时，ZooKeeper客户端库在会话闲置了*s/3* ms后发送了心跳信号，如果在*2s/3* ms内未收到服务器的消息，则切换到新服务器，其中*s*是 session timeout（以毫秒为单位）。
 
+## 5 Evaluation
+
+我们所有的评估都在一个有 50 台机器的集群上进行。每台服务器都有一个 Xeno 双核 2.1GHz 的处理器，4GB的 RAM，千兆以太网和两个 SATA 硬盘驱动器设备。我们把下面的讨论分为两部分：请求的吞吐量和延迟。
+
+### 5.1 Throughput
+
+为了评估我们的系统，以系统饱和时的吞吐量和注入各种故障的吞吐量为基准。我们变更了 ZooKeeper 服务中 ZooKeeper 服务器的数量，但始终保持客户端数量不变。 为了模拟大量的客户端，我们使用了35台机器来模拟250个并发客户端。
+
+我们有 ZooKeeper 服务器的 Java 实现，以及 Java 和 C 客户端。对于这些实验，我们配置 Java 服务器将日志写到一个专用磁盘上，并将快照写在另一个磁盘上。我们的 benchmark 客户端使用异步的 Java 客户端 API，每个客户端至少有100个未完成的请求。每个请求都包含对 1K 大小数据的读取或写入。我们没有显示其他操作的 benchmark，因为所有修改状态的操作的性能大致相同，而除 `sync` 之外的非状态修改操作的性能大致相同。 （由于`sync` 请求必须发送给 leader，但不会被广播，因此同步的性能近似于轻量级写操作。）客户每300毫秒发送一次已完成操作的数目，我们每6秒钟采样一次。 为了防止内存溢出，服务器会限制系统中并发请求的数量。 ZooKeeper 服务器使用 request throttling 来防止服务器不堪重负。 对于这些实验，我们将ZooKeeper服务器配置为最多处理 2000 个请求。
+
+![fig05_throughout_performance](images/fig05_throughout_performance.png)
+
+![table01_throughout_performance](images/table01_throughout_performance.png)
+
+在 Figure 5 中在，我们显示了不同读写请求的比率下的吞吐量，每条曲线对应于不同数量的服务器的 ZooKeeper 集群。表1显示了读取负载极限时的数字。读取吞吐量高于写入吞吐量，因为读取不使用原子广播。该图还显示服务器的数量也对广播的性能产生负面影响。从这些图中，我们观察到系统中的服务器数量不仅影响服务可以处理的故障数量，还影响服务可以处理的工作负载。请注意，三个服务器的曲线与其他服务器的曲线相交约60％。这种情况并不排除三服务器配置，由于启用了本地并行读取，所有配置都会发生这种情况。为了提高可读性，我们已限制了最大y轴吞吐量，所以我们看不到其它配置的情况。
+
+写请求比读请求花费更长的时间有两个原因。 首先，写请求必须经过原子广播，这需要一些额外的处理并增加请求的延迟。写请求处理时间较长的另一个原因是，服务器必须确保在将确认发送回领导者之前，将事务记录到非易失性存储中（即磁盘/SSD等）。 原则上，此要求过于昂贵，对于我们的生产系统，我们要求可靠，所以我们用性能为代价，来换得可靠性。 我们使用更多的服务器哥来容忍更多的错误。  我们使用更多的服务器来容忍更多的错误。 通过将 ZooKeeper 数据分片为多个 ZooKeeper 组，我们提高了写入吞吐量。 Gray等人先前已经观察到复制和分区之间的这种性能折衷。 [12]。
+
+![fig06_throughout_performance](images/fig06_throughout_performance.png)
+
+ZooKeeper 可以通过把请求分发给组成服务的服务器来提高负载。因为宽松的一致性保证，我们可以为 ZooKeeper 分发负载。不同的是，Chubby 的客户端直接把请求发给 leader。 图6显示了如果我们不利用这种宽松的一致性而强迫 client 只能连接到 leader，会发生什么。 正如预期的那样，对于读取为主的工作负载，吞吐量要低得多，即使对于写入为主的工作负载，吞吐量也会降低。 为客户端提供服务会导致额外的 CPU和网络负载，从而影响 leader 协调广播的能力，进而对总体写入性能产生不利影响。
+
+原子广播协议完成了系统的大部分工作，因此它对 ZooKeeper 的限制比其它逐渐都大。Figure 7 展示了原子广播协议组件的吞吐量。为了测试其性能，我们通过直接在领导者处生成事务来模拟客户端，因此没有客户端连接或客户端请求和回复。在最大吞吐量下，原子广播组件成为 CPU-boundary 的，瓶颈是 CPU。从理论上讲，图7的性能将与100％写操作的ZooKeeper性能相匹配。但是，ZooKeeper客户端通信，ACL检查以及  Request Processor 均需要CPU。对CPU的争用将 ZooKeeper 吞吐量降低到实质上低于上述隔离状态的原子广播组件。 因为 ZooKeeper 是关键的生产组件，所以到目前为止，我们对 ZooKeeper 的开发重点一直是正确性和鲁棒性。 通过消除多余的副本，减少同一对象的多个序列化，使用更有效的内部数据结构等之类的东西，有很多机会可以显着提高性能。
+
+![fig07_average_throughout](images/fig07_average_throughout.png)
+
+为了显示随着时间注入故障中，系统吞吐量的变化，我们运行了由 5台计算机组成的ZooKeeper服务。 我们使用与以前相同的饱和度基准，但是这次我们将写入百分比保持在恒定的 30％，这是一个预期的比较保守的比例。 我们定期 kill 了一些服务器进程。 图8显示了系统吞吐量随时间变化的情况。 图中标记的事件如下：
+
+1. Failure and recovery of a follower; （follower 的宕机和恢复）
+2. Failure and recovery of a different follower; （另一个不同 follower 的宕机和恢复）
+3. Failure of the leader; （leader 的宕机）
+4. Failure of two followers (a, b) in the first two marks, and recovery at the third mark (c); 
+5. Failure of the leader. （leader 的宕机）
+6. Recovery of the leader （leader 的恢复）
+
+这张图有几个重要的观察结果。首先，如果 follower 失败并迅速恢复，则 ZooKeeper 能够在这个失败的情况下维持高吞吐量。单个跟随器的故障不会阻止服务器形成 quorum，而只会通过共享服务器正在处理的读取请求的来粗糙降低吞吐量（即这台服务器上的读请求被派发往别的服务器）。其次，我们的领导者选举算法能够足够快地恢复，以防止吞吐量大幅下降。根据我们的观察，ZooKeeper只需不到200毫秒即可选出新的领导者。因此，尽管服务器停止了几分之一秒的请求服务，但是由于我们的采样周期（大约数秒），我们没有观察到吞吐量为零。第三，即使 follower 需要更多时间来恢复，ZooKeeper 也可以在恢复的服务器开始处理请求后再次提高吞吐量。我们没有在事件1、2和4之后恢复到完整吞吐量级别的原因之一是，客户端仅在其与 follower 的连接断开时才切换跟随者。因此，在事件4之后，直到 leader 在事件3和事件5宕机之前，client 不会重新分配到别的服务器上。实践中，随着客户端不断连接断开，这种不平衡会随着时间的流逝逐渐消失。
+
+### 5.2 Latency of requests
+
+
+
+### 5.3 Performance of barriers
+
+
+
+## 6 Related work
+
+
+
+## 7 Conclusions
+
+
+
+### Acknowledgements
+
+> We would like to thank Andrew Kornev and Runping Qi for their contributions to ZooKeeper; Zeke Huang and Mark Marchukov for valuable feedback; Brian Cooper and Laurence Ramontianu for their early contributions to ZooKeeper; Brian Bershad and Geoff Voelker made important comments on the presentation.
+
+## Reference
+
+1. [1]  M. Abd-El-Malek, G. R. Ganger, G. R. Goodson, M. K. Reiter, and J. J. Wylie. Fault-scalable byzantine fault-tolerant services. In *SOSP ’05: Proceedings of the twentieth ACM symposium on Operating systems principles*, pages 59–74, New York, NY, USA, 2005. ACM.
+2. [2]  M. Aguilera, A. Merchant, M. Shah, A. Veitch, and C. Karamano- lis. Sinfonia: A new paradigm for building scalable distributed systems. In *SOSP ’07: Proceedings of the 21st ACM symposium on Operating systems principles*, New York, NY, 2007.
+3. [3]  Amazon. Amazon simple queue service. http://aws. amazon.com/sqs/, 2008.
+4. [4]  A. N. Bessani, E. P. Alchieri, M. Correia, and J. da Silva Fraga. Depspace: A byzantine fault-tolerant coordination service. In *Proceedings of the 3rd ACM SIGOPS/EuroSys European Systems Conference - EuroSys 2008*, Apr. 2008.
+5. [5]  K.P.Birman.Replicationandfault-toleranceintheISISsystem. In *SOSP ’85: Proceedings of the 10th ACM symposium on Oper- ating systems principles*, New York, USA, 1985. ACM Press.
+6. [6]  M. Burrows. The Chubby lock service for loosely-coupled dis- tributed systems. In *Proceedings of the 7th ACM/USENIX Sympo- sium on Operating Systems Design and Implementation (OSDI)*, 2006.
+7. [7]  M. Castro and B. Liskov. Practical byzantine fault tolerance and proactive recovery. *ACM Transactions on Computer Systems*, 20(4), 2002.
+8. [8]  T.Chandra,R.Griesemer,andJ.Redstone.Paxosmadelive:An engineering perspective. In *Proceedings of the 26th annual ACM symposium on Principles of distributed computing (PODC)*, Aug. 2007.
+9. [9]  A.Clement,M.Kapritsos,S.Lee,Y.Wang,L.Alvisi,M.Dahlin, and T. Riche. UpRight cluster services. In *Proceedings of the 22 nd ACM Symposium on Operating Systems Principles (SOSP)*, Oct. 2009.
+10. [10]  J.Cowling,D.Myers,B.Liskov,R.Rodrigues,andL.Shira.Hq replication: A hybrid quorum protocol for byzantine fault toler- ance. In *SOSP ’07: Proceedings of the 21st ACM symposium on Operating systems principles*, New York, NY, USA, 2007.
+11. [11]  G. DeCandia, D. Hastorun, M. Jampani, G. Kakulapati, A. Lak- shman, A. Pilchin, S. Sivasubramanian, P. Vosshall, and W. Vo- gels. Dynamo: Amazons highly available key-value store. In*SOSP ’07: Proceedings of the 21st ACM symposium on Operat- ing systems principles*, New York, NY, USA, 2007. ACM Press.
+12. [12]  J. Gray, P. Helland, P. O’Neil, and D. Shasha. The dangers of replication and a solution. In *Proceedings of SIGMOD ’96*, pages 173–182, New York, NY, USA, 1996. ACM.
+13. [13]  A. Hastings. Distributed lock management in a transaction pro- cessing environment. In *Proceedings of IEEE 9th Symposium on Reliable Distributed Systems*, Oct. 1990.
+14. [14]  M. Herlihy. Wait-free synchronization. *ACM Transactions on Programming Languages and Systems*, 13(1), 1991.
+15. [15]  M. Herlihy and J. Wing. Linearizability: A correctness condi- tion for concurrent objects. *ACM Transactions on Programming Languages and Systems*, 12(3), July 1990.
+16. [16]  J. H. Howard, M. L. Kazar, S. G. Menees, D. A. Nichols, M. Satyanarayanan, R. N. Sidebotham, and M. J. West. Scale and performance in a distributed file system. *ACM Trans. Com- put. Syst.*, 6(1), 1988.
+17. [17]  Katta. Katta - distribute lucene indexes in a grid. http:// katta.wiki.sourceforge.net/, 2008.
+18. [18]  R. Kotla, L. Alvisi, M. Dahlin, A. Clement, and E. Wong. Zyzzyva: speculative byzantine fault tolerance. *SIGOPS Oper. Syst. Rev.*, 41(6):45–58, 2007.
+19. [19]  N. P. Kronenberg, H. M. Levy, and W. D. Strecker. Vaxclus- ters (extended abstract): a closely-coupled distributed system. *SIGOPS Oper. Syst. Rev.*, 19(5), 1985.
+20. [20]  L. Lamport. The part-time parliament. *ACM Transactions on Computer Systems*, 16(2), May 1998.
+21. [21]  J. MacCormick, N. Murphy, M. Najork, C. A. Thekkath, and L. Zhou. Boxwood: Abstractions as the foundation for storage infrastructure. In *Proceedings of the 6th ACM/USENIX Sympo- sium on Operating Systems Design and Implementation (OSDI)*, 2004.
+22. [22]  L. Moser, P. Melliar-Smith, D. Agarwal, R. Budhia, C. Lingley- Papadopoulos, and T. Archambault. The totem system. In *Pro- ceedings of the 25th International Symposium on Fault-Tolerant Computing*, June 1995.
+23. [23]  S. Mullender, editor. *Distributed Systems, 2nd edition*. ACM Press, New York, NY, USA, 1993.
+24. [24]  B. Reed and F. P. Junqueira. A simple totally ordered broad- cast protocol. In *LADIS ’08: Proceedings of the 2nd Workshop on Large-Scale Distributed Systems and Middleware*, pages 1–6, New York, NY, USA, 2008. ACM.
+25. [25]  N. Schiper and S. Toueg. A robust and lightweight stable leader election service for dynamic systems. In *DSN*, 2008.
+26. [26]  F. B. Schneider. Implementing fault-tolerant services using the state machine approach: A tutorial. *ACM Computing Surveys*, 22(4), 1990.
+27. [27]  A.Sherman,P.A.Lisiecki,A.Berkheimer,andJ.Wein.ACMS: The Akamai configuration management system. In *NSDI*, 2005.
+28. [28]  A. Singh, P. Fonseca, P. Kuznetsov, R. Rodrigues, and P. Ma- niatis. Zeno: eventually consistent byzantine-fault tolerance. In *NSDI’09: Proceedings of the 6th USENIX symposium on Networked systems design and implementation*, pages 169–184, Berkeley, CA, USA, 2009. USENIX Association.
+29. [29]  Y. J. Song, F. Junqueira, and B. Reed. BFT for the skeptics. http://www.net.t- labs.tu- berlin.de/ ̃petr/BFTW3/abstracts/talk- abstract.pdf.
+30. [30]  R. van Renesse and K. Birman. Horus, a flexible group com- munication systems. *Communications of the ACM*, 39(16), Apr. 1996.
+31. [31]  R. van Renesse, K. Birman, M. Hayden, A. Vaysburd, and D. Karr. Building adaptive systems using ensemble. *Software - Practice and Experience*, 28(5), July 1998.
