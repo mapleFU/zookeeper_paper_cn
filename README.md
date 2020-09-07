@@ -55,7 +55,7 @@ ZooKeeper 通过实现 watch 来让 client 不需要轮询即可及时接收到�
 
 #### 数据模型
 
-ZooKeeper 的数据模型是一个只有把整个 znode 全部数据全部读/写的文件系统的简化 api，或者可以说说是有 key 层次的 key/value 表。层次名称空间对于为不同应用程序的名称空间分配子树、设置对这些子树的访问权限很有用。 我们还将在客户端利用目录的概念来构建更高级别的原语，如我们在2.4节中将看到的。
+ZooKeeper 的数据模型是一个只有把整个 znode 全部数据全部读/写的文件系统的简化 api，或者可以说是有 key 层次的 key/value 表。层次名称空间对于为不同应用程序的名称空间分配子树、设置对这些子树的访问权限很有用。 我们还将在客户端利用目录的概念来构建更高级别的原语，如我们在2.4节中将看到的。
 
 ![fig01_hierarchical_name_space](images/fig01_hierarchical_name_space.png)
 
@@ -65,7 +65,7 @@ ZooKeeper 的数据模型是一个只有把整个 znode 全部数据全部读/�
 
 #### Sessions
 
-client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 timeout。如果ZooKeeper 在 timeout 内没有收到来自 `session` 的 client 的任何消息，则认为该 client 有故障。 当 client 显式关闭会话句柄或 ZooKeeper 检测到 client 故障时，会话结束。 `session` 使客户端可以在ZooKeeper集成中从一台服务器透明地移动到另一台服务器，因此 `session` 可以在 ZooKeeper 服务器之间持久存在。在 `session` 中，client 观察到一系列状态变化，这些状态变化反映了 ZooKeeper 操作的执行。 `session` 使客户端可以在 ZooKeeper 集群中从一台服务器透明地移动到另一台服务器，因此`session`可以在 ZooKeeper 服务器之间持久存在。
+client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 timeout。如果ZooKeeper 在 timeout 内没有收到来自 `session` 的 client 的任何消息，则认为该 client 有故障。 当 client 显式关闭会话句柄或 ZooKeeper 检测到 client 故障时，会话结束。在 `session` 中，client 观察到一系列状态变化，这些状态变化反映了 ZooKeeper 操作的执行。 `session` 使客户端可以在 ZooKeeper 集群中从一台服务器透明地移动到另一台服务器，因此`session`可以在 ZooKeeper 服务器之间持久存在。
 
 ### 2.2 Client API
 
@@ -74,12 +74,12 @@ client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 ti
 * `create(path, data, flags)`: 根据路径名称 `path`，它存储的`data[]`，创建一个 `znode`, 并返回这个新的 `znode` 的名称。`flags` 允许客户端选择选定的 `znode` 类型：`regular`, `ephemeral` 及设置 `sequential`  flag。
 * `delete(path, version)`: 如果 `znode` 符合给定的 `version` 版本，则删除`path` 下的 `znode`。
 * `exists(path, watch)`: 如果 `path` 下的 `znode` 存在，返回 true, 否则返回 false.`watch` 标志可以使 client 在 `znode` 上设置 watch。
-* `getData(path, watch)`: 返回 `znode` 的数据和元数据（元数据例如版本信息）。`watch` 和 `exists()` 里面的作用一样，不同之处在于，如果`znode`不存在，则 ZooKeeper 不会设置手表。
+* `getData(path, watch)`: 返回 `znode` 的数据和元数据（元数据例如版本信息）。`watch` 和 `exists()` 里面的作用一样，不同之处在于，如果`znode`不存在，则 ZooKeeper 不会设置`watch`。
 * `setData(path, data, version)`: 如果 `version` 是 `znode` 现有的版本，把 `data[]` 写进 `znode`.
 * `getChildren(path, watch)`: 返回`path` 对应的 `znode` 的子节点集合。
 * `sync(path)`: 等待操作开始时所有没有同步的更新传播到 client 连接到的服务器。 该`path` 当前被忽略。
 
-所有的的方法在 API 中都有一个同步版本和一个异步版本。 当应用程序需要执行单个 ZooKeeper 操作且没有要并发执行的任务时，它会使用同步API，因此它会进行必要的 ZooKeeper 调用并进行阻塞。但是，异步API使应用程序可以并行执行多个未完成的 ZooKeeper 操作和其他任务。 ZooKeeper client 保证按顺序调用每个操作的相应回调。
+所有的方法在 API 中都有一个同步版本和一个异步版本。 当应用程序需要执行单个 ZooKeeper 操作且没有要并发执行的任务时，它会使用同步API，因此它会进行必要的 ZooKeeper 调用并进行阻塞。但是，异步API使应用程序可以并行执行多个未完成的 ZooKeeper 操作和其他任务。 ZooKeeper client 保证按顺序调用每个操作的相应回调。
 
 需要注意的是，ZooKeeper 不使用句柄来操纵 `znode`。作为替代，每个请求都带有需要操作的 `znode` 的完整路径。这样不仅仅简化了 API \(没有 `open()` 和 `close()` 方法\)，也消除了服务器需要维护的额外状态。
 
@@ -109,7 +109,7 @@ ZooKeeper 也有下述两个 liveness 和持久性保证：如果**大部分** Z
 
 ### 2.4 Examples of primitives
 
-在本节中，我们将展示如何使用 ZooKeeper API来实现更强大的原语。 ZooKeeper 服务对这些更强大的原语一无所知，因为它们是完全使用 ZooKeeper client API在客户端上实现的。 一些常见的原语（例如group membership 和配置管理）也是 wait-free 的。 对于其他地方，例如 rendezvous，client 需要等待事件。 即使ZooKeeper 无需等待，我们也可以使用 ZooKeeper 实现高效的阻塞原语。ZooKeeper的顺序保证允许对系统状态进行有效的推理，而 watch 则可以进行有效的等待。
+在本节中，我们将展示如何使用 ZooKeeper API来实现更强大的原语。 ZooKeeper 服务对这些更强大的原语一无所知，因为它们是完全使用 ZooKeeper client API在客户端上实现的。 一些常见的原语（例如group membership 和配置管理）也是 wait-free 的。 对于其他场景，例如 rendezvous，client 需要等待事件。 虽说ZooKeeper 无需等待，但我们也可以使用 ZooKeeper 实现高效的阻塞原语。ZooKeeper的顺序保证允许对系统状态进行有效的推理，而 watch 则可以进行有效的等待。
 
 #### 配置管理
 
@@ -133,7 +133,7 @@ ZooKeeper 可以被用来实现分布式应用中的动态配置。在它最简�
 
 尽管ZooKeeper不是锁服务，但可以用来实现锁。使用 ZooKeeper 的应用程序通常使用根据其需求量身定制的同步原语，例如上面所示的那些。在这里，我们展示了如何使用 ZooKeeper 实现锁，以表明它可以实现各种各样的常规同步原语。
 
-最简单的锁实现使用“lock files”。该锁由 `znode` 表示。为了获取锁，客户端尝试使用`EPHEMERAL`标志创建指定的`znode`。如果创建成功，则客户端将持有该锁。否则，客户端可以设置 watch 标志读取`znode`，以便在当前领导者去世时得到通知。客户端宕机或显式删除`znode`时会释放该锁。其他等待锁定的客户端一旦观察到`znode`被删除，就会再次尝试获取锁\(即创建 `znode` )。
+最简单的锁实现使用“lock files”。该锁由 `znode` 表示。为了获取锁，客户端尝试使用`EPHEMERAL`标志创建指定的`znode`。如果创建成功，则客户端将持有该锁。否则，客户端可以设置 watch 标志读取`znode`，以便在当前领导者宕机或显式删除`znode`以释放锁时，得到通知。其他等待锁定的客户端一旦观察到`znode`被删除，就会再次尝试获取锁\(即创建 `znode` )。
 
 尽管此简单的锁定协议有效，但确实存在一些问题。首先，它具有惊群效应。如果有许多等待获取锁的客户端，则即使只有一个客户端可以获取锁，他们也会争夺该锁。其次，它仅实现互斥锁（没有实现读写锁等模式）。以下两个原语显示了如何同时解决这两个问题。
 
@@ -154,7 +154,7 @@ Unlock
 1: delete(n)
 ```
 
-在Lock的第1行中使用`SEQUENTIAL`标志，命令 client 尝试获取锁，并相对其它的尝试获得一个序列号。如果客户端的`znode`在第3行的序列号最小，则客户端将持有该锁。否则，客户端将等待删除下列两种 `znode`: 持有 Lock 的 `znode`，将在此客户端的`znode` 之前获得锁的 `znode` 。通过仅查看客户端`znode`之前的`znode`，我们仅在释放锁或放弃锁请求时才唤醒一个进程，从而避免了惊群效应。客户端 watch 的znode消失后，客户端必须检查它现在是否持有该锁。（先前的 Lock 请求可能已被放弃，并且具有较低序号的`znode` 仍在等待或保持锁。）
+在Lock的第1行中使用`SEQUENTIAL`标志，命令 client 尝试获取锁，并相对其它的尝试获得一个序列号。如果客户端的`znode`在第3行的序列号最小，则客户端将持有该锁。否则，客户端将等待下列两种 `znode`被删除: 持有 Lock 的 `znode`，将在此客户端的`znode` 之前获得锁的 `znode` 。通过仅查看客户端`znode`之前的`znode`，我们仅在释放锁或放弃锁请求时才唤醒一个进程，从而避免了惊群效应。客户端 watch 的znode消失后，客户端必须检查它现在是否持有该锁。（先前的 Lock 请求可能已被放弃，或者具有较低序号的`znode` 仍在等待或保持锁。）
 
 释放锁就简单地直接删除代表 Lock 请求的`znode`  *n*。通过在创建 `znode` 时使用`EPHEMERAL`标志，崩溃的进程将自动清除所有锁定请求或释放它们可能拥有的任何锁定。
 
