@@ -1,14 +1,14 @@
-# ZooKeeper: wait-free 的大型网络协调系统
+# ZooKeeper: 免等待（Wait-free）的大型网络协调系统
 
 ## Abstract
 
-在这篇论文中，我们描述了 ZooKeeper，一个协调分布式应用的服务。ZooKeeper 是基础架构的一部分，目标是提供一个简单的、高性能的内核，供客户端构建更复杂的协调原语。它在多副本、中心化的服务中，组合了 group messaging, shared registers 和分布式锁服务。ZooKeeper 提供的接口有 wait-free 的 shared registers, 和一个与文件系统 cache 失效相似的事件驱动机制，用于提供一个简单但功能强大的协调服务。
+在这篇论文中，我们描述了 ZooKeeper，一个协调分布式应用的服务。ZooKeeper 是基础架构的一部分，目标是提供一个简单的、高性能的内核，供客户端构建更复杂的协调原语。它在多副本、中心化的服务中，组合了消息群发（*group messaging*）, 共享寄存器（*shared registers*）和分布式锁（*Distributed Lock*）服务。ZooKeeper 提供的接口有 wait-free 的共享寄存器和一个事件驱动机制，与分布式文件系统的 cache 失效机制类似，提供了一个简单但功能强大的协调服务。
 
-ZooKeeper 接口使实现高性能服务成为可能。除了 wait-free 的属性之外，ZooKeeper 提供了一个**每个客户端请求是 FIFO 执行**的语义，和**改变 ZooKeeper 状态的请求都是 Linearizable** 的语义。这些设计决策可以使 ZooKeeper 的读可以读本地服务器，使实现高性能处理请求流水线成为可能。对于目标工作负载，我们显示了2:1到100:1 的读/写请求比例，ZooKeeper 每秒可以处理成千上万的事务。 这种性能使 ZooKeeper 可以被客户端应用程序广泛使用。
+ZooKeeper 接口支持实现高性能服务。除了 *wait-free* 的属性之外，ZooKeeper 还为每个客户端请求提供了 **FIFO 执行**的语义，和**ZooKeeper 状态更新请求线性化（*Linearizable*）** 的语义。通过这些设计决策， ZooKeeper 的本地服务器可以处理读请求，从而实现高性能请求处理流水线。对于目标工作负载，读/写请求比例为2:1到100:1，表明ZooKeeper 每秒可以处理成千上万的事务。 这种性能使 ZooKeeper 可以广泛应用于各种客户端应用程序。
 
 ## 1. Introduction
 
-大规模的分布式应用需要不同形式的协调。配置是最基础的形式之一。配置最简单的形式仅仅是作为系统进程运行参数的列表，而更复杂的系统有动态的配置参数。Group membership 和领导选举在分布式系统中也很常见：通常，进程需要知道哪些其他进程是可用的（alive）以及这些进程负责什么。Locks 建立了一个强大的同步原语，实现对关键资源的互斥访问。
+大规模的分布式应用需要不同形式的协调。配置是最基础的形式之一。配置最简单的形式仅仅是作为系统进程的运行参数列表，而更多复杂系统有动态的配置参数。集群关系（*Group Membership*）和主节点选举（*Leader Election*）在分布式系统中也很常见：通常，进程需要知道哪些其他进程是可用的（alive）以及这些进程负责什么。锁（*Locks* ）建立了一个强大的同步原语，实现对关键资源的互斥访问。
 
 一种协调的方式是，为不同的需求开发不同的服务。例如，Amazon Simple Queue Service \[3\] 专注于队列服务。另外一些服务专门用于领导选举和配置。实现了更强原语的服务可以被用于实现没有那么强大原语的服务。例如，Chubby 是一个有很强同步保证的锁服务。锁可以用来实现领导选举，组成员等服务。
 
@@ -28,44 +28,44 @@ ZooKeeper 使用副本来保证服务的高可用和性能。它的高性能使�
 
 作为总结，这篇文章中，我们主要的贡献是：
 
-* **Coordination kernel**: 我们提出了一种 wait-free 的协调服务，可用于在分布式系统中提供宽松的（relaxed）一致性保证。特别是，我们描述了*协调内核*的设计和实现，我们已经在许多关键应用程序中使用了协调内核来实现各种协调技术。
+* **Coordination kernel**: 我们提出了一种 wait-free 的协调服务，可用于在分布式系统中提供宽松的（*relaxed*）一致性保证。特别是，我们描述了*协调内核*的设计和实现，我们已经在许多关键应用程序中使用了协调内核来实现各种协调技术。
 * **Coordination recipes**: 我们展示了如何使用 ZooKeeper 在分布式系统中构建高级协调原语，甚至是常用的阻塞和强一致性原语
 * **Experience with Coordination**: 我们分享了一些我们使用 ZooKeeper 的方式，并评估其性能。
 
 ## 2. The ZooKeeper Service
 
-客户端通过 ZooKeeper 客户端 API 库向 ZooKeeper 递交请求。除了暴露 ZooKeeper 服务的 client API 接口, ZooKeeper 客户端库也管理 client 和 ZooKeeper 服务器间的网络连接。
+客户端通过 ZooKeeper 的客户端 API 库向 ZooKeeper 递交请求。除了暴露 ZooKeeper 服务的 client API 接口, ZooKeeper 客户端库还负责管理 client 和 ZooKeeper 服务间的网络连接。
 
 在这一节中，我们首先提供一个 ZooKeeper 服务的高层级视图（high-level view）。接下来讨论 client 与 ZooKeeper 交互的 API。
 
-> **术语** 在这篇论文章，我们使用 *`client`* 来表示一个 ZooKeeper 服务的使用者，*`znode`* 表示一个内存中的 ZooKeeper 数据的节点，它会被组织成在一个被称为 `data tree` 的分层命名空间中。我们还使用术语“更新和写入”来指代任何修改数据树状态的操作。 客户在连接到 ZooKeeper 时建立一个会话（session），并获得一个会话句柄，通过它发送请求。
+> **术语** 在这篇论文中，使用客户端（*client*）表示 ZooKeeper 服务的使用者，服务器（*server*） 表示提供 ZooKeeper 服务的进程， *znode* 表示内存中的 ZooKeeper 数据节点，它会被组织在一个称为数据树（*data tree*）的层级命名空间中。使用术语“更新和写入”（*update and write*）来指代任何修改数据树状态的操作。 客户在连接到 ZooKeeper 时建立一个会话（*session*），并获得一个会话句柄，通过它发送请求。
 
 ### 2.1 Service Overview
 
-ZooKeeper 给它的客户端提供了“data nodes\(`znodes`\)的集合”的抽象，用分层的命名空间组织他们。client 通过 API 操纵在这个层次中的数据对象。分层的命名空间在文件系统里被广泛使用。这是一种组织数据对象的可靠方法，因为用户已经习惯了这种抽象，同时它可以更好的组织应用的元数据。为了引用一个给定的 `znode` ，我们使用标准的 UNIX 文件系统路径符号。例如，我们使用 `/A/B/C` 来表示一条到 `znode` C 的路径，B 是 C 的父节点，同时 A 是 B 的父节点。所有的 `znode` 都存储数据，并且除了 `ephemeral znodes` 外的所有 `znode` 都能拥有子节点。
+ZooKeeper 给它的客户端提供“若干数据节点\(znodes\)”的抽象，这些数据节点通过分层的命名空间来组织。客户端通过ZooKeeper API 操纵在这个层级中的数据对象。分层的命名空间广泛应用于文件系统里。这是一种可靠的数据对象组织方式，因为用户已经习惯了这种抽象，同时它可以更好的组织应用程序元数据。为了引用一个给定的 `znode` ，我们使用标准的 UNIX 文件系统路径符号。例如，我们使用 `/A/B/C` 来表示一条到 `znode` C 的路径，B 是 C 的父节点，同时 A 是 B 的父节点。所有的 `znode` 都存储数据，并且除了临时 Znodes（`ephemeral znodes`）外的所有 `znode` 都能拥有子节点。
 
-client 可以创建两种 `znode`:
+客户端可以创建两种 `znode`:
 
-* `Regular`: client 可以显式操纵和删除 `regular znodes`
-* `Ephemeral`: client 会创建这种节点，这类节点要么被显式删除，要么在创建这个节点的 `session` 断开的时候（故意或由于故障）被系统自动删除。
+* 常规节点（`Regular`）: client 可以通过创建或删除来显式操纵 `regular znodes`；
+* 临时节点（`Ephemeral`）: client 创建临时节点，这类节点要么显式删除它们，要么让系统在创建它们的会话终止时（故意或由于故障）自动删除它们。
 
-此外，当我们创建一个新的 `znode` 的时候，client 可以设置 `sequential` flag. 通过 `sequential` flag 创建的节点会在节点名称中添加一个单调递增的计数器的值。如果 `n` 是新的 `znode`, `p` 是他的父节点，那么 `n` 的名称中添加的值不会小与 `p` 的子节点中创建过的任何一个添加过的值。
+此外，当客户端创建新的 `znode` 的时候，可以设置 *sequential* 标志。带有 *sequential* 标志创建的节点会在节点名称后附加一个单调递增的计数器的值。如果 *n* 是新的 znode,  *p* 是 *n* 的父节点，那么 *n* 的附加值不会小于 *p* 已有子节点的任何一个附加值。
 
-ZooKeeper 通过实现 watch 来让 client 不需要轮询即可及时接收到值的变化的通知。当客户端在设置了 `watch` flag 的情况下发起读取操作时，除了服务器承诺在返回的信息发生变化时通知客户端外，其他操作都会正常完成。 watches 是被关联到 `session` 的一次性触发器； 一旦触发或者该 `session` 关闭，它们将被注销。 `watch` 表明发生了变更，但未提供变更的内容。 例如，如果客户端在两次更改`/foo`之前发出了请求 `getData('/foo'，true)`，则客户端将只获得一个 watch事件，告知客户端`/foo`的数据已更改。`session` 事件（例如连接丢失事件）也将发送到 watch 回调，以便客户端知道 watch 事件可能会延迟.
+ZooKeeper 通过实现 watch 来让 client 不需要轮询即可及时接收到值变化的通知。当客户端设置 `watch` 标志发起读取操作时，除了服务器承诺在返回的信息发生变化时通知客户端外，其他操作都会正常完成。 Watches 是与会话关联的一次性触发器； 一旦触发或者该会话关闭，它们将被注销。 Watches 表明发生了变更，但并不提供变更的内容。 例如，如果客户端在两次更改`/foo`之前发出了请求 `getData('/foo'，true)`，则客户端将只获得一个 watch事件，告知客户端`/foo`的数据已更改。会话事件（例如连接丢失事件）也将发送到 watch 回调，以便客户端知道 watch 事件可能会延迟。
 
 #### 数据模型
 
-ZooKeeper 的数据模型本质上是一个简化了API的文件系统，只支持完整的数据读写，或者可以说是 key 有层级的 key/value 表。分层命名空间对于为不同应用的命名空间分配子树以及设置这些子树的访问权限非常有用。我们还将在客户端利用目录的概念来构建更高级别的原语，如我们在2.4节中将看到的。
+ZooKeeper 的数据模型本质上是一个简化了API的文件系统，只支持完整数据的读写，或者可以说是一个带有层级式 key 的 key/value 表。分层命名空间便于为不同应用的命名空间分配子树，也便于为这些子树设置访问权限。我们还将在客户端利用目录的概念来构建高级原语，见2.4节。
 
 ![fig01_hierarchical_name_space](images/fig01_hierarchical_name_space.png)
 
-与文件系统中的文件不同，znode 不是为通用数据存储设计的。 相反，`znodes` 存储 client 引用的数据，通常是用于协调的元数据。为了展示，在 Figure 1 中我们有两个子树，一个用于应用程序1（`/app1`），另一个用于应用程序2（`/app2`）。应用程序1的子树实现了一个简单的组成员身份协议：每个客户端进程`pi`在`/app1`下创建一个`znode`  `pi` ，只要该进程还在运行，节点便会持续存在。
+与文件系统中的文件不同，znodes 不是为通用数据存储设计的。 相反，`znodes` 映射到客户端应用程序的抽象，通常与用于协调的元数据相对应。为了说明， Figure 1 中有两个子树，一个用于应用程序1（`/app1`），另一个用于应用程序2（`/app2`）。应用程序1的子树实现了一个简单的组成员身份协议（group membership protocol）：每个客户端进程`pi`在`/app1`下创建一个`znode`  `p_i` ，只要该进程还在运行，节点便会持续存在。
 
-尽管 `znode` 并非设计用于通用数据存储，但是 ZooKeeper 允许客户端存储一些可用于分布式计算中的元数据或配置的信息。例如，在基于 leader 的应用程序中，对应用服务而言，确定当前的Leader很有用。为了实现此目标，我们可以让当前的领导者在 `znode` 空间中的已知位置写入此信息。 `znode` 还将元数据与 timestamp 和 version counter 关联，这使客户端可以跟踪对 `znode` 的更改并根据 `znode` 的版本执行条件更新。
+尽管 `znode` 并非为通用数据存储设计，但是 ZooKeeper 允许客户端存储一些可用于分布式计算中的元数据或配置的信息。例如，在基于主节点（*leader-based*）的应用程序中，对其他应用程序的服务而言，`znode`非常便于用来确定当前的主节点是哪个服务器。为了实现这种方式，我们可以让当前的主节点在 `znode` 空间中的已知位置写入信息。 `znode` 还将元数据与时间戳（*timestamp*）和版本计数器（ *version counter* ）关联，这样客户端就可以跟踪对 `znode` 的更改并根据 `znode` 的版本执行条件更新。
 
 #### Sessions
 
-client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 timeout。如果ZooKeeper 在 timeout 内没有收到来自 `session` 的 client 的任何消息，则认为该 client 有故障。 当 client 显式关闭会话句柄或 ZooKeeper 检测到 client 故障时，会话结束。在 `session` 中，client 观察到一系列状态变化，这些状态变化反映了 ZooKeeper 操作的执行。 `session` 使客户端可以在 ZooKeeper 集群中从一台服务器透明地移动到另一台服务器，因此`session`可以在 ZooKeeper 服务器之间持久存在。
+客户端连接到 ZooKeeper 并初始化 `session`。`session `具有关联的超时时间（*timeout*）。如果ZooKeeper 在 超时时间内没有收到来自创建 `session` 的客户端的任何消息，则认为该客户端故障。 当客户端显式关闭会话句柄或 ZooKeeper 检测到客户端故障时，会话结束。在 `session` 中，客户端可以观察到一系列反应其操作执行的状态变化。 `session` 使客户端能够在 ZooKeeper 集群中透明地从一台服务器转移到另一台服务器，从而在 ZooKeeper 服务器之间持续存在。
 
 ### 2.2 Client API
 
@@ -73,13 +73,14 @@ client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 ti
 
 * `create(path, data, flags)`: 根据路径名称 `path`，它存储的`data[]`，创建一个 `znode`, 并返回这个新的 `znode` 的名称。`flags` 允许客户端选择选定的 `znode` 类型：`regular`, `ephemeral` 及设置 `sequential`  flag。
 * `delete(path, version)`: 如果 `znode` 符合给定的 `version` 版本，则删除`path` 下的 `znode`。
-* `exists(path, watch)`: 如果 `path` 下的 `znode` 存在，返回 true, 否则返回 false.`watch` 标志可以使 client 在 `znode` 上设置 watch。
-* `getData(path, watch)`: 返回 `znode` 的数据和元数据（元数据例如版本信息）。`watch` 和 `exists()` 里面的作用一样，不同之处在于，如果`znode`不存在，则 ZooKeeper 不会设置`watch`。
+  * `exists(path, watch)`: 如果 `path` 下的 `znode` 存在，返回 true, 否则返回 false.`watch` 标志可以使 client 在 `znode` 上设置 watch。 
+
+* `getData(path, watch)`: 返回 `znode` 的数据和 znode 相关的元数据（例如版本信息）。`watch` 和 `exists()` 里面的作用一样，不同之处在于，如果`znode`不存在，则 ZooKeeper 不会设置`watch`。
 * `setData(path, data, version)`: 如果 `version` 是 `znode` 现有的版本，把 `data[]` 写进 `znode`.
 * `getChildren(path, watch)`: 返回 `path` 对应的 `znode` 的子节点集合。
 * `sync(path)`: 等待操作开始时所有没有同步的更新传播到 client 连接到的服务器。 该 `path` 当前被忽略。
 
-所有的方法在 API 中都有一个同步版本和一个异步版本。 当应用程序需要执行单个 ZooKeeper 操作且没有要并发执行的任务时，它会使用同步API，因此它会进行必要的 ZooKeeper 调用并进行阻塞。但是，异步API使应用程序可以并行执行多个未完成的 ZooKeeper 操作和其他任务。ZooKeeper client 保证按顺序调用每个操作的相应回调。
+API 中的所有的方法都有一个同步版本和一个异步版本。 当应用程序需要执行单个 ZooKeeper 操作且没有要并发执行的任务时，使用同步API，因此它会进行必要的 ZooKeeper 调用并进行阻塞。但是，异步API使应用程序可以并行执行多个未完成的 ZooKeeper 操作和其他任务。ZooKeeper client 保证每个操作的相应回调按照按顺序调用。
 
 需要注意的是，ZooKeeper 不使用句柄来操纵 `znode`。相反，每个请求都带有需要操作的 `znode` 的完整路径。这样不仅仅简化了 API \(没有 `open()` 和 `close()` 方法\)，也消除了服务器需要维护的额外状态。
 
@@ -89,17 +90,17 @@ client 连接到 ZooKeeper 并初始化 `session`。`session `具有关联的 ti
 
 ZooKeeper 有两个基本的顺序保证：
 
-* **Linearizable Writes**: 所有的更新 ZooKeeper 状态的请求都是 serializable 的，并且遵循优先级。
-* **FIFO client order**: 一个给定客户端发送的所有的请求都是按照客户端发送的顺序有序执行的。
+* **线性写入**（**Linearizable Writes**）: 所有的更新 ZooKeeper 状态的请求都是可序列化的（ *serializable* ），并且遵循优先级。
+* **FIFO的客户端顺序**（**FIFO client order**）: 给定客户端发送的所有请求都按照客户端发送顺序有序执行。
 
-注意我们对 `linearizability` 的定义和 Herihy 的原始提议不同，我们叫它 *A-linearizability* \(asynchronize linearizability\). 在 Herilihy 的原始的 linearizable 定义，一个客户端只能在同一时间内有一个未完成的请求（一个客户端是一个线程）。在我们的系统中，我们允许一个客户端有复数个未完成的操作，并且我们可以选择不保证未完成操作的执行顺序，或者保证 FIFO 顺序。我们选择后者作为我们的属性。可以观察到，对于保持 linearizable 对象也会保持 A-linearizable ，因为满足 A-linearizable 的系统也会满足 linearizable。因为只有更新请求是 A-linearizable 的，ZooKeeper 在每个副本本地处理读请求。这样，当服务器添加到系统时，服务可以线型扩展。
+注意我们对线性（`linearizability`） 的定义和 Herihy 提出的原始定义不同，我们叫它 *A-linearizability* \(asynchronize linearizability，异步线性)。 在 Herilihy 的原始线性定义中，一个客户端在同一时间只能有一个未完成的请求（一个客户端是一个线程）。在我们的系统中，允许一个客户端有多个未完成的操作，所以我们可以选择不保证未完成操作的执行顺序，或者保证 FIFO 顺序。我们选择后者作为 ZooKeeper 的属性。可以观察到，适用于可线性化对象的所有结果也适用于异步线性化对象，因为满足异步线性的系统也必然满足线性。由于只有更新请求是异步线性的，ZooKeeper 在每个副本本地处理读请求。因此，当系统添加服务器时，服务可以线型扩展。
 
-为了了解两个保证是怎么交互的，考虑以下场景。一个系统由一组进程组成，它选择出一个 leader，并由 leader 操作工作进程。当一个新的 Leader 接管整个系统时，它必须更新大量的配置参数，并在更新结束的时候通知其它进程。这样我们有两个重要的需求：
+为了了解两个保证是怎么交互的，考虑以下场景。系统由一组进程组成，它选择出一个 leader，并由 leader 操作工作进程。当一个新的 Leader 接管整个系统时，它必须更新大量的配置参数，并在更新结束的时候通知其它进程。这样我们有两个重要的需求：
 
 1. 当新的 Leader 开始更改系统时，我们不希望其它进程开始使用正在被更改的配置。
 2. 当新的 Leader 在配置完全更新完成之前就宕机时，我们不希望其它进程使用半更新的配置。
 
-注意到，分布式锁，例如 Chubby 提供的锁，可以满足需求1，但是无法满足需求2。有了 ZooKeeper, 新的 Leader 可以指定一个路径，并把它当成一个 `ready znode`，其他的进程只会在这个 `znode` 存在的时候使用这套配置。新的 leader 靠 \(1\) 删除 `ready` \(2\) 更新各种配置的 `znode` \(3\) 重新创建 `ready` 来完成上述需求。上述的所有变更可以被流水线处理，并发起一个异步请求来快速更新配置状态。尽管更改操作的延迟约为2毫秒，但是如果一个请求接一个发出（即同步的一个一个请求处理），则需要更新 5000 个不同znode的新 leader 将花费10秒。 通过异步发出请求，请求将花费不到一秒钟的时间。由于顺序保证，如果进程看到 ready `znode`，则它还必须看到新的 Leader 所做的所有配置更改。 如果新的 Leader 在创建完 ready `znode` 之前宕机，则其他进程知道该配置尚未完成，因此不使用它。
+一些分布式锁，例如 Chubby 提供的锁，可以满足需求1，但是无法满足需求2。有了 ZooKeeper，新的 Leader 可以指定一个路径作为 `ready znode`，其他的进程只会在这个 `znode` 存在的时候使用这套配置。新的 leader 靠 \(1\) 删除 `ready` \(2\) 更新各种配置的 `znode` \(3\) 重新创建 `ready` 来完成上述需求。上述的所有变更可以被流水线处理，并发起一个异步请求来快速更新配置状态。尽管更改操作的延迟约为2毫秒，但是如果一个请求接一个发出（即同步的一个一个请求处理），则需要更新 5000 个不同znode的新 leader 将花费10秒。 通过异步发出请求，请求将花费不到一秒钟的时间。由于顺序保证，如果进程看到 ready `znode`，则它还必须看到新的 Leader 所做的所有配置更改。 如果新的 Leader 在创建完 ready `znode` 之前宕机，则其他进程知道该配置尚未完成，因此不使用它。
 
 上述的模式仍然有一个问题：如果一个进程在新的领导开始进行变更之前看到 ready 存在，然后在变更进行中开始读取配置，会发生什么？这个问题通过 notification 的顺序保证解决：如果一个客户端正在 watch 一个变更，这个客户端会在它看到配置变更之前收到一个通知。因此，如果读取 ready `znode` 的进程请求要在 `znode` 变更的时候被通知，它的 client 会在收到配置变化之前，收到  ready `znode` 变化的通知。
 
