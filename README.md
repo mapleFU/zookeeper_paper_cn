@@ -190,7 +190,7 @@ Read Lock
 3: if no write znodes lower than n in C, exit
 4: p = write znode in C ordered just before n
 5: if exists(p, true) wait for event
-6: goto 3
+6: goto 3 (这里论文写的是 goto 3, 经网友提醒, 实际上应该是 goto 2)
 ```
 
 该上锁过程与之前上锁的过程略有不同。 写锁仅在命名上有所不同。 由于读锁可能是 shared 的，因此第3行和第4行略有不同，因为只有较早的写锁`znode`会阻止客户端获得读锁。 当有多个客户端等待读锁时，当删除具有较低序号的`write-` znode时，我们可能会收到 “惊群效应”。 实际上，这是一种符合预期的行为，所有那些需要读的客户端都应被通知，因为它们现在可能持有锁。
